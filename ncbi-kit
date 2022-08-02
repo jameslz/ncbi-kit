@@ -1,0 +1,246 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+use Switch;
+use LWP::Simple;
+use File::Basename;
+
+my $usage = <<_EOUSAGE_;
+
+Usage: ncbi-kit <command> <arguments>
+supports:
+
+-- download
+   manifest  <assemblies>
+   download  <manifest>
+   rsync     <manifest>
+   ascp      <manifest>
+
+-- misc
+   fetch     <assembly>  <type|fna|faa|gff>
+   assembly  <ftps>
+
+version 0.0.2
+
+Licenced:
+(c) 2021-2022 - LEI ZHANG
+Logic Informatics Co.,Ltd.
+zhanglei\@logicinformatics.com
+
+_EOUSAGE_
+;
+
+if( ( scalar @ARGV) < 1){
+    printf STDERR $usage;
+    exit;
+
+}
+
+my $cmd           = shift @ARGV; 
+
+switch($cmd){
+
+    case 'manifest'  { manifest_run();   }
+    case 'rsync'     { rsync_run();   }
+    case 'ascp'      { ascp_run();   }
+    case 'download'  { download_run();   }
+    case 'fetch'     { fetch_run();      }
+    case 'assembly'  { assembly_run();   }
+    else             { print qq{[ERR]: not support ' $cmd ' subcommond!\n};};
+
+}
+
+exit;
+
+sub manifest_run{
+
+    if(@ARGV != 1){
+        printf STDERR qq{\n[ERR]: arguments number error!\n$usage};
+        exit;
+    }
+
+    my $assembly = shift @ARGV;
+    manifest( $assembly );
+
+}
+
+
+sub manifest{
+    
+    my $fn = shift;
+
+    my $fh;
+    ($fn eq '-') ? ( $fh = "STDIN" ) :
+                   (open( $fh, $fn ) || die "[ERR]: can't open $fn.\n");
+
+    while (<$fh>) {
+        
+        $_=~s/\s+$//;
+        my ($major, $h1, $h2, $h3) = $_ =~ /^([A-Z]{3})_([0-9]{3})([0-9]{3})([0-9]{3})/;
+        my $path = qq{all/$major/$h1/$h2/$h3/$_};
+        print qq{$path/$_\_genomic.fna.gz\n};
+        print qq{$path/$_\_protein.faa.gz\n};
+        print qq{$path/$_\_genomic.gff.gz\n};
+
+    }
+
+    close $fh;
+}
+
+sub rsync_run{
+
+    if(@ARGV != 1){
+        printf STDERR qq{\n[ERR]: arguments number error!\n$usage};
+        exit;
+    }
+
+    my $manifest = shift @ARGV;
+    rsync( $manifest );
+
+}
+
+sub rsync {
+
+    my $fn   = shift;
+    my $path = qq{rsync://ftp.ncbi.nlm.nih.gov/genomes/};
+    `mkdir -p all`;
+    my $cmd  = qq{rsync --no-motd --files-from=$fn $path . 2> rsync.err\n};
+    system $cmd;
+
+}
+
+sub download_run {
+
+    if(@ARGV != 1){
+        printf STDERR qq{\n[ERR]: arguments number error!\n$usage};
+        exit;
+    }
+
+    my $manifest = shift @ARGV;
+    download( $manifest );
+
+}
+
+sub download {
+
+    my $fn   = shift;   
+    my $path = qq{https://ftp.ncbi.nlm.nih.gov/genomes};
+    
+    my $fh;
+    ($fn eq '-') ? ( $fh = "STDIN" ) :
+                   (open( $fh, $fn ) || die "[ERR]: can't open $fn.\n");
+    while (<$fh>) {
+        
+        $_=~s/\s+$//;
+        my $cmd  = qq{wget $path/$_\n};
+        print $cmd;
+    }    
+    close $fh;
+
+}
+
+sub fetch_run{
+
+    if(@ARGV != 2){
+        printf STDERR qq{\n[ERR]: arguments number error!\n$usage};
+        exit;
+    }
+
+    my $assembly = shift @ARGV;
+    my $type     = shift @ARGV;
+    `mkdir -p fetch`;
+    fetch( $assembly, $type );
+
+}
+
+sub fetch{
+    
+    my $fn   = shift;
+    my $type = shift;
+
+    open(DATA, $fn ) || die "[ERR]: can't open $fn. \n";
+
+    while (<DATA>) {
+        
+        $_=~s/\s+$//;
+        my ($major, $h1, $h2, $h3) = $_ =~ /^([A-Z]{3})_([0-9]{3})([0-9]{3})([0-9]{3})/;
+        my $tag  = ($type eq 'faa') ? 'protein' : 'genomic';
+        my $path = qq{all/$major/$h1/$h2/$h3/$_/$_\_$tag.$type.gz};
+        if(-e $path){
+            print STDOUT  qq{cp $path  fetch;\n};
+        }else{
+            print STDERR  qq{[ERR:] can't locate $_\t$path\n};
+        }
+
+    }
+
+    close DATA;
+}
+
+sub assembly_run{
+
+    if(@ARGV != 1){
+        printf STDERR qq{\n[ERR]: arguments number error!\n$usage};
+        exit;
+    }
+
+    my $ftps     = shift @ARGV;
+    assemblies( $ftps );
+}
+
+sub assemblies{
+    
+    my $fn   = shift;
+    my $fh;
+    ($fn eq '-') ? ( $fh = "STDIN" ) :
+                   (open( $fh, $fn ) || die "[ERR]: can't open $fn.\n");
+
+    while (<$fh>) {
+        
+        $_=~s/\s+$//;
+        my @t = split /\//, $_;
+        print qq{$t[-1]\n};
+    }
+
+    close $fh;
+}
+
+sub ascp_run {
+
+    if(@ARGV != 1){
+        printf STDERR qq{\n[ERR]: arguments number error!\n$usage};
+        exit;
+    }
+
+    my $ftps = shift @ARGV;
+    ascp( $ftps );
+
+}
+
+sub ascp {
+
+    my $fn   = shift;
+    my $which = "";
+    for my $exe (qw/ascp/) {
+        $which  = qx(which $exe 2> /dev/null);
+        $which or print STDERR qq{[ERR]: can not find required '$exe' in PATH\n};
+            chomp $which;
+    }
+    my $ascp =  dirname( $which ) . '/..';
+
+    my $fh;
+    ($fn eq '-') ? ( $fh = "STDIN" ) :
+                   (open( $fh, $fn ) || die "[ERR]: can't open $fn.\n");
+
+    while (<$fh>) {
+        
+        $_=~s/\s+$//;
+        my $cmd  = qq{$ascp/bin/ascp -i $ascp/etc/asperaweb_id_dsa.openssh --overwrite=diff -QTr -l6000m anonftp\@ftp.ncbi.nlm.nih.gov:genomes/};
+        my $ascp = $cmd . $_ . " .\n";
+        print  $ascp;
+
+    }    
+    close $fh;
+
+}
